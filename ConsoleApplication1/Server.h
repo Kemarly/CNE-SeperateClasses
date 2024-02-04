@@ -1,37 +1,48 @@
 #pragma once
+#include <iostream>
+#include <map>
 #include <unordered_map>
+#include <vector>
 #include <string>
-#include <thread>
-#include <set>
-#include <chrono>
-using namespace std;
+#include <mutex>
+#include <winsock2.h>
+#include <WS2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
 
-class Server
-{
-private:
-	unordered_map<string, string> userCredentials;
-	const int MAX_CLIENTS = 5;
-	WSADATA wsaData;
-	set<SOCKET> connectedClients; 
-	SOCKET udpSocket;
-	sockaddr_in broadcastAddr;
-	thread udpBroadcastThread;
-	bool udpBroadcastRunning;
+class Server {
 public:
-	int init(int port, int capacity, char commandChar, int udpPort);
-	int tcp_recv_whole(SOCKET s, char* buf, int len);
-	int readMessage(char* buffer, int32_t size);
-	int sendMessage(char* data, int32_t length);
-	string GetHelpMessage();
-	int RegisterUser(const string& username, const string& password);
-	int HandleCommand(const string& command);
-	int ProcessLogin(const string& username, const string& password, SOCKET clientSocket);
-	int BroadcastMessage(const string& message, SOCKET senderSocket);
-	void handleMultipleClients();
-	int SendClientList(SOCKET clientSocket);
-	int SavePublicMessage(const string& message);
-	int initUDP(int udpPort);
-	void startUDPBroadcast();
-	void stopUDPBroadcast();
-	void stop();
+    Server();
+    ~Server();
+
+    void Start();
+    void UDPBroadcast();
+    static const int UDP_BROADCAST_PORT = 12345; // Choose a port number
+    static const int UDP_BROADCAST_INTERVAL = 10; // Interval in seconds
+
+    std::string serverIP;
+    int serverPort;
+
+
+private:
+    std::mutex clientMutex;
+    SOCKET listenSocket;
+    fd_set masterset, readyset;
+    std::unordered_map<std::string, std::string> userCredentials;
+
+    static const char DEFAULT_COMMAND_CHAR = '~';
+    static const int MAX_BUFFER_SIZE = 256;
+    static const int MAX_CLIENTS = 5;
+
+    std::string GetHelpMessage();
+    int RegisterUser(const std::string& username, const std::string& password);
+    int tcp_recv_whole(SOCKET s, char* buf, int len);
+    int tcp_send_whole(SOCKET skSocket, const char* data, uint16_t length);
+    void BroadcastMessage(const std::string& message);
+    void ProcessLogin(const std::string& username, const std::string& password, SOCKET clientSocket);
+    std::string GetClientList();
+    void HandleCommand(const std::string& command);
+    void HandleClient(SOCKET clientSocket, fd_set& readSet);
+    void ServerCode();
+        void UDPBroadcast();
 };
+

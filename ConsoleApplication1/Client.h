@@ -1,25 +1,28 @@
 #pragma once
-#include <string>
-#include <vector>
-using namespace std;
+#include <iostream>
+#include <winsock2.h>
+#include <WS2tcpip.h>
+#include <thread>
+#include <chrono>
 
-class Client
-{
-private:
-	SOCKET listenSocket;
-	SOCKET ComSocket;
-	const int MAX_CLIENTS = 5;
-	vector<string> publicMessages;
+class Client {
 public:
-	int init(uint16_t port, char* address);
-	int tcp_send_whole(SOCKET skSocket, const char* data, uint16_t length);
-	int tcp_recv_whole(SOCKET s, char* buf, int len);
-	int readMessage(char* buffer, int32_t size);
-	int sendMessage(char* data, int32_t length);
-	int HandleCommand(const string& command, SOCKET clientSocket);
-	int ProcessLogin(const string& username, const string& password, SOCKET clientSocket);
-	int BroadcastMessage(const string& message, SOCKET senderSocket);
-	int SendClientList(SOCKET clientSocket);
-	int SavePublicMessage(const string& message);
-	void stop();
+    Client();
+    ~Client();
+
+    void Connect(const std::string& serverIP, int serverPort);
+    void Start();
+    void ReceiveMessages();
+    void SendMessage(const std::string& message);
+
+private:
+    SOCKET clientSocket;
+    std::thread receiveThread;
+
+    static const int MAX_BUFFER_SIZE = 256;
+
+    int tcp_recv_whole(SOCKET s, char* buf, int len);
+    int tcp_send_whole(SOCKET skSocket, const char* data, uint16_t length);
+    void HandleReceivedMessage(const char* buffer);
 };
+

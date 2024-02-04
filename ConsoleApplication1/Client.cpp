@@ -1,185 +1,128 @@
 #include "Client.h"
-#include <iostream>
-#include <thread>
-#include <map>
-#include <vector>
-#include <winsock2.h>
-#include <WS2tcpip.h>
-#include <string>
-#pragma comment(lib, "ws2_32.lib")
-#define _CRT_SECURE_NO_WARNINGS 
-#define _WINSOCK_DEPRECATED_NO_WARNINGS 
-using namespace std;
-
-int Client::init(uint16_t port, char* address)
+int tcp_recv_whole(SOCKET s, char* buf, int len)
 {
-	//Socket
-	if (ComSocket == INVALID_SOCKET)
-	{
-		ComSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-		if (ComSocket == INVALID_SOCKET) { printf("Connection Error\n"); }
-	
-	}
+    int total = 0;
+    int ret = recv(s, buf, 1, 0);
+    if (ret <= 0)
+        return ret;
+    uint8_t size = static_cast<uint8_t>(*buf);
+    do
+    {
+        int ret = recv(s, buf + total, len - total, 0);
+        if (ret < 1)
+            return ret;
+        else
+            total += ret;
 
-	//Connect
-	sockaddr_in serverAddr;
-	serverAddr.sin_family = AF_INET;
-	serverAddr.sin_port = htons(port);
-	if (inet_pton(AF_INET, address, &serverAddr.sin_addr) <= 0) { printf("address Error\n"); }
+    } while (total < len);
+    return total;
+}
+int tcp_send_whole(SOCKET skSocket, const char* data, uint16_t length)
+{
+    int result;
+    result = send(skSocket, reinterpret_cast<const char*>(&length), 1, 0);
+    if (result <= 0)
+        return result;
+    int bytesSent = 0;
+    while (bytesSent < length)
+    {
+        result = send(skSocket, data + bytesSent, length - bytesSent, 0);
+        if (result <= 0)
+            return result;
+        bytesSent += result;
+    }
+    return bytesSent;
+}
+Client::Client() {
+    // Initialize Winsock
+    WSADATA wsadata;
+    if (WSAStartup(WINSOCK_VERSION, &wsadata) != 0) {
+        std::cerr << "Failed to initialize Winsock." << std::endl;
+        exit(EXIT_FAILURE);
+    }
 
-
-	int result = connect(ComSocket, (SOCKADDR*)&serverAddr, sizeof(serverAddr));
-	if (result == SOCKET_ERROR) {
-		printf("Connection Error\n"); }
-	printf("Success\n");
+    // Create a TCP socket
+    clientSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (clientSocket == INVALID_SOCKET) {
+        std::cerr << "Failed to create socket." << std::endl;
+        WSACleanup();
+        exit(EXIT_FAILURE);
+    }
 }
 
-int Client::tcp_send_whole(SOCKET skSocket, const char* data, uint16_t length)
-{
-	int result;
-	int bytesSent = 0;
-
-	while (bytesSent < length)
-	{
-		result = send(skSocket, (const char*)data + bytesSent, length - bytesSent, 0);
-		if (result <= 0)
-			return result;
-		bytesSent += result;
-	}
-	return bytesSent;
-}
-int Client::tcp_recv_whole(SOCKET s, char* buf, int len)
-{
-	int total = 0;
-	do
-	{
-		int ret = recv(s, buf + total, len - total, 0);
-		if (ret < 1)
-			return ret;
-		else
-			total += ret;
-
-	} while (total < len);
-	return total;;
+Client::~Client() {
+    // Cleanup Winsock
+    closesocket(clientSocket);
+    WSACleanup();
 }
 
-int Client::readMessage(char* buffer, int32_t size)
-{
-	//Communication
-	char sendbuffer[30];
-	memset(sendbuffer, 0, 30);
+void Client::Connect(const std::string& serverIP, int serverPort) {
+    sockaddr_in serverAddr;
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(serverPort);
+    inet_pton(AF_INET, serverIP.c_str(), &serverAddr.sin_addr);
 
-	int result = tcp_recv_whole(ComSocket, sendbuffer, size);
-	if ((result == SOCKET_ERROR) || (result == 0))
-	{
-		int error = WSAGetLastError();
-		printf("Disconnect\n");
-	}
+    if (connect(clientSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
+        std::cerr << "Failed to connect to the server." << std::endl;
+        closesocket(clientSocket);
+        WSACleanup();
+        exit(EXIT_FAILURE);
+    }
 
-	result = tcp_recv_whole(ComSocket, buffer, size);
-	if ((result == SOCKET_ERROR) || (result == 0))
-	{
-		int error = WSAGetLastError();
-		//delete[] sendbuffer;
-		printf("Paramiter error\n");
-	}
-	//delete[] sendbuffer;
-	printf("Success\n");
+void Client::Start() {
+    const char* welcomeMessage = "Welcome to the Server!\n Please enter your commands starting with (~): ";
+    tcp_send_whole(clientSocket, welcomeMessage, strlen(welcomeMessage));
+    while (true)
+    {
+        uint8_t size = 0;
+        int result = tcp_recv_whole(clientSocket, reinterpret_cast<char*>(&size), 1);
+        if ((result == SOCKET_ERROR) || (result == 0))
+        {
+            std::lock_guard<std::mutex> lock(clientMutex);
+            printf("  recv disconnected client\n");
+            FD_CLR(clientSocket, &readSet);
+            closesocket(clientSocket);
+            break;
+        }
+
+        char* buffer = new char[size];
+        result = tcp_recv_whole(clientSocket, buffer, size);
+        if ((result == SOCKET_ERROR) || (result == 0))
+        {
+            std::lock_guard<std::mutex> lock(clientMutex);
+            printf("  Client stopped connection\n");
+            FD_CLR(clientSocket, &readSet);
+            closesocket(clientSocket);
+            delete[] buffer;
+            break;
+        }
+        {
+            std::lock_guard<std::mutex> lock(clientMutex);
+            printf(" Received a message from a client\n");
+            printf("\n\n");
+            printf("%s", buffer);
+            printf("\n\n");
+
+            // Set the command variable with the received message
+            string command = string(buffer);
+            HandleCommand(command);
+        }
+        delete[] buffer;
+    }
 }
-int Client::sendMessage(char* data, int32_t length)
-{
-	//Communication
-	uint8_t messageSize = static_cast<uint8_t>(length);
-	int result = send(ComSocket, (char*)&messageSize, sizeof(messageSize), 0);
-
-	if ((result == SOCKET_ERROR) || (result == 0))
-	{
-		int error = WSAGetLastError();
-		printf("shutdown\n");
-	}
-
-	result = send(ComSocket, data, length, 0);
-	if ((result == SOCKET_ERROR) || (result == 0))
-	{
-		int error = WSAGetLastError();
-		printf("Disconnect\n");
-	}
-	printf("Success\n");
+void Client::SendMessage(const std::string& message) {
+    int bytesSent = send(clientSocket, message.c_str(), message.length(), 0);
+    if (bytesSent == SOCKET_ERROR) {
+        std::cerr << "Failed to send message." << std::endl;
+    }
 }
-
-int Client::ProcessLogin(const string& username, const string& password, SOCKET clientSocket)
-{
-
-}
-int Client::BroadcastMessage(const string& message, SOCKET senderSocket)
-{
-
-}
-int Client::SendClientList(SOCKET clientSocket)
-{
-
-}
-int Client::SavePublicMessage(const string& message)
-{
-
-}
-
-int Client::HandleCommand(const string& command, SOCKET clientSocket)
-{
-	if (command.empty())	printf("Success\n");
-
-
-	char commandChar = command[0];
-	string args = command.substr(1);
-	switch (commandChar)
-	{
-	case '~':
-		if (args.find("register") == 0)
-		{
-			// ~register
-			size_t spacePos = args.find(' ');
-			if (spacePos != string::npos)
-			{
-				string username = args.substr(9, spacePos - 9);
-				string password = args.substr(spacePos + 1);
-			}
-		}
-		else if (args.find("login") == 0)
-		{
-			//~login
-			size_t spacePos = args.find(' ');
-			if (spacePos != string::npos)
-			{
-				string username = args.substr(6, spacePos - 6);
-				string password = args.substr(spacePos + 1);
-				ProcessLogin(username, password, clientSocket);
-			}
-		}
-		else if (args.find("send") == 0)
-		{
-			SendClientList(clientSocket);
-		}
-		else if (args.find("getlist") == 0)
-		{
-			// ~getlist 
-		}
-		else if (args.find("logout") == 0)
-		{
-			// ~logout
-		}
-		else
-		{
-
-		}
-		break;
-	default:
-		BroadcastMessage(command, clientSocket); break;
-	}
+void Client::ReceiveMessages() {
+    // Implement the message receiving logic here
+    // ...
 }
 
-void Client::stop()
-{
-	shutdown(ComSocket, SD_BOTH);
-	closesocket(ComSocket);
-	WSACleanup();
+void Client::SendMessage(const std::string& message) {
+    // Implement the message sending logic here
+    // ...
 }
+
